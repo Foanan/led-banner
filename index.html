@@ -12,10 +12,10 @@
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%;overflow:hidden;background:#000;
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
-    touch-action:none;overscroll-behavior:none;}
+    overscroll-behavior:none;}
 
   /* ---------- 舞台与旋转容器 ---------- */
-  #stage{position:fixed;inset:0;overflow:hidden;background:#000}
+  #stage{position:fixed;inset:0;overflow:hidden;background:#000;touch-action:none}
   #rotor{position:absolute;left:50%;top:50%;transform-origin:center center;overflow:hidden}
   #track{position:absolute;white-space:nowrap;will-change:transform}
   #text{
@@ -50,7 +50,7 @@
     backdrop-filter:blur(14px);border-top:1px solid var(--line);border-radius:18px 18px 0 0;
     padding:14px 16px calc(env(safe-area-inset-bottom) + 16px);
     transform:translateY(105%);transition:transform .28s cubic-bezier(.2,.8,.2,1);
-    max-height:80vh;overflow-y:auto;}
+    max-height:80vh;overflow-y:auto;touch-action:pan-y;}
   body.ui #panel{transform:translateY(0)}
   .row{display:flex;align-items:center;gap:10px;margin-bottom:12px}
   .row label{font-size:12px;color:var(--dim);min-width:52px}
@@ -200,9 +200,14 @@
   function save(){
     try{ localStorage.setItem('led-banner-v2', JSON.stringify(state)); }catch(e){}
   }
+  // 输入时每个字符都写 localStorage 会卡，攒 250ms 再落盘
+  var saveT = null;
+  function scheduleSave(){ clearTimeout(saveT); saveT = setTimeout(function(){ saveT = null; save(); }, 250); }
+  function flushSave(){ if(saveT !== null){ clearTimeout(saveT); saveT = null; save(); } }
 
   /* ---------------- 布局：旋转 + 字号 ---------------- */
   var dims = { w:0, h:0 };
+  var layoutSig = '';
 
   function computeRotation(){
     var portraitNow = window.innerHeight > window.innerWidth;
@@ -236,7 +241,9 @@
     if(lb){
       lb.textContent = (window.innerHeight > window.innerWidth ? '当前竖屏' : '当前横屏') + (rot ? ' · 已旋转' : '');
     }
-    resetScroll();
+    // 只有几何真的变了才重置滚动；改文字时不该把字幕打回起点
+    var sig = [rot, w, h, state.layout, textEl.style.fontSize].join('|');
+    if(sig !== layoutSig){ layoutSig = sig; resetScroll(); }
   }
 
   /* ---------------- 滚动 ---------------- */
@@ -295,7 +302,7 @@
     stage.style.background = state.bg;
     document.body.style.background = state.bg;
     layout();
-    save();
+    scheduleSave();
   }
 
   /* ---------------- 控件 ---------------- */
@@ -338,7 +345,7 @@
   document.querySelectorAll('.chip[data-flag]').forEach(function(el){
     el.onclick=function(){
       var k=el.dataset.flag; state[k]=!state[k];
-      if(k==='awake' && state.awake) requestWake();
+      if(k==='awake'){ state.awake ? requestWake() : releaseWake(); }
       syncChips(); applyStyle();
     };
   });
@@ -358,6 +365,10 @@
   var hideTimer;
   function showUI(){ document.body.classList.add('ui'); clearTimeout(hideTimer); hideTimer=setTimeout(hideUI,5000); }
   function hideUI(){ document.body.classList.remove('ui'); }
+  // 面板里任何操作都续期，避免打字打到一半面板自己收起
+  function bumpUI(){ if(document.body.classList.contains('ui')) showUI(); }
+  $('#panel').addEventListener('input', bumpUI);
+  $('#panel').addEventListener('click', bumpUI);
 
   stage.addEventListener('click', function(){ document.body.classList.contains('ui') ? hideUI() : showUI(); });
   $('#btnPanel').onclick=function(e){ e.stopPropagation(); showUI(); };
@@ -373,7 +384,7 @@
   }
 
   input.addEventListener('input', function(){ state.text=input.value; applyStyle(); });
-  speed.addEventListener('input', function(){ state.speed=+speed.value; $('#speedVal').textContent=state.speed; save(); });
+  speed.addEventListener('input', function(){ state.speed=+speed.value; $('#speedVal').textContent=state.speed; scheduleSave(); });
   size.addEventListener('input', function(){ state.size=+size.value; $('#sizeVal').textContent=state.size; applyStyle(); });
 
   /* ---------------- 防息屏 ---------------- */
@@ -387,8 +398,15 @@
       }else{ toast('此浏览器不支持防息屏'); }
     }catch(err){ toast('防息屏开启失败：'+err.message); }
   }
+  function releaseWake(){
+    try{ if(wakeLock){ var w=wakeLock; wakeLock=null; w.release(); } }catch(e){}
+  }
   document.addEventListener('visibilitychange', function(){
-    if(document.visibilityState==='visible' && state.awake && !wakeLock) requestWake();
+    if(document.visibilityState==='visible'){
+      if(state.awake && !wakeLock) requestWake();
+    }else{
+      flushSave();   // 切走前把攒着的设置落盘
+    }
   });
 
   /* ---------------- 键盘 ---------------- */
